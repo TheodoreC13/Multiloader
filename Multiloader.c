@@ -35,21 +35,35 @@ typedef struct {
 	uint16_t characteristics;
 } PE_Header;
 
-#define ELF_MAGIC 0x7F454C46 //0x7FELF
-#define PE_SIG 0x00004550 // PE
 #define THREAD_COUNT 5
 
 pthread_mutex_t print_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void print_elf_info(Elf32_Ehdr *elf_header){
+	char buf[256];
+	int result = snprintf(buf, sizeof(buf), "Elf File Detected.\n"
+			"Entry Point: 0x%x\n", elf_header->e_entry);
 	while(!pthread_mutex_trylock(&print_mutex));
-	printf("Elf File detected.\n");
-	printf("Entry point: 0x%x\n", elf_header->e_entry);
+	fputs(buf, stdout);
 	pthread_mutex_unlock(&print_mutex);
 }
 void print_pe_info(PE_Header *pe_header){
+	char buf[256];
+	int result = snprintf(buf, sizeof(buf), "PE File Detected.\n"
+			"Number of Sections: %d\n", pe_header->numberOfSections);
 	while(!pthread_mutex_trylock(&print_mutex));
-	printf("PE file detected.\n");
+	fputs(buf, stdout);
+	pthread_mutex_unlock(&print_mutex);
+}
+void print_elf_info_slow(Elf32_Ehdr *elf_header){
+	while(!pthread_mutex_trylock(&print_mutex));
+	printf("Elf File Detected.\n");
+	printf("Entry Point: 0x%x\n", elf_header->e_entry);
+	pthread_mutex_unlock(&print_mutex);
+}
+void print_pe_info_slow(PE_Header *pe_header){
+	while(!pthread_mutex_trylock(&print_mutex));
+	printf("PE File Detected.\n");
 	printf("Number of Sections: %d\n", pe_header->numberOfSections);
 	pthread_mutex_unlock(&print_mutex);
 }
@@ -60,7 +74,8 @@ int identify(char *filename){
 		perror("Error opening file");
 		return 1;
 	}
-
+	clock_t pstart, pend;
+	double time;
 	unsigned char magic[4];
 	fread(magic, 1, 4, file);
 	/*
@@ -73,10 +88,16 @@ int identify(char *filename){
 		Elf32_Ehdr elf_header;
 		fseek(file, 0, SEEK_SET);
 		fread(&elf_header, sizeof(Elf32_Ehdr), 1, file);
-		//uint32_t ehmagic = *(uint32_t*)elf_header.e_ident;
-		//ehmagic = (ehmagic >> 24) | ((ehmagic >> 8) & 0x0000FF00) | ((ehmagic << 8) & 0x00FF0000) | (ehmagic << 24);
-		//printf("Elf Magic: 0x%08x\n", ehmagic);
+		pstart = clock();
 		print_elf_info(&elf_header);
+		pend = clock();
+		time = ((double)(pend-pstart));
+		printf("regular print elf info: %f\n", time);
+		pstart = clock();
+		print_elf_info_slow(&elf_header);
+		pend = clock();
+		time = ((double)(pend-pstart));
+		printf("slow print elf info: %f\n", time);
 	}
 	else if (magic[0] == 0x4D && magic[1] == 0x5A){
 		fseek(file, 0x3C, SEEK_SET);
@@ -86,7 +107,16 @@ int identify(char *filename){
 		fseek(file, pe_header_offset, SEEK_SET);
 		PE_Header pe_header;
 		fread(&pe_header, sizeof(PE_Header), 1, file);
+		pstart = clock();
 		print_pe_info(&pe_header);
+		pend = clock();
+		time = ((double)(pend-pstart));
+		printf("regular print pe info: %f\n", time);
+		pstart = clock();
+		print_pe_info_slow(&pe_header);
+		pend = clock();
+		time = ((double)(pend-pstart));
+		printf("slow print pe info: %f\n", time);
 	}
 	else {
 		fprintf(stderr, "Unknown file format\n");
@@ -97,8 +127,6 @@ int identify(char *filename){
 	return 0;
 }
 // change threads to have a waitlist if >5 are need
-// print -> rewrite to a buffer. use snprintf buffer of 32 bytes -> fputs of the buffer to stdout lock the fputs not the snprintf
-// add timers for funsies
 int main(int argc, char *argv[]){
 	clock_t start_time, end_time;
 	double time_taken;
