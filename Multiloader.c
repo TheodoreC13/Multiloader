@@ -35,7 +35,7 @@ typedef struct {
 	uint16_t characteristics;
 } PE_Header;
 
-#define THREAD_COUNT 5
+#define THREAD_COUNT 2
 
 pthread_mutex_t print_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -126,9 +126,8 @@ int identify(char *filename){
 	fclose(file);
 	return 0;
 }
-// change threads to have a waitlist if >5 are need
 int main(int argc, char *argv[]){
-	clock_t start_time, end_time;
+	clock_t start_time, end_time, start_two, end_two;
 	double time_taken;
 	start_time = clock();
 	if (argc < 2){
@@ -140,12 +139,20 @@ int main(int argc, char *argv[]){
 		return 0;
 	}
 	else{
-		//name file file file file file
 		pthread_t tid[THREAD_COUNT];
-		for(int i = 0; i<argc-1; i++){
-			pthread_create(&tid[i], NULL, identify, argv[i+1]);
+		start_two = clock();
+		for (int i = 0; i<argc-1; i++){
+			if (argc & 1 == 0){
+			pthread_create(&tid[0], NULL, identify, argv[i+1]);
+			}
+			else {
+			pthread_create(&tid[1], NULL, identify, argv[i+1]);
+			}
 		}
-		for(int i = 0; i<argc-1;i++){
+		end_two = clock();
+		double time_two = ((double)(end_two - start_two));
+		printf("Time for thread creation: %f\n", time_two);
+		for(int i = 0; i<THREAD_COUNT;i++){
 			pthread_join(tid[i], NULL);
 		}
 		
