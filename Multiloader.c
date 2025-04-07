@@ -5,6 +5,8 @@
 #include <pthread.h>
 #include <time.h>
 
+#define THREAD_COUNT 2
+
 //Elf
 typedef struct {
 	unsigned char e_ident[16]; // ID bytes, magic number + more
@@ -23,6 +25,20 @@ typedef struct {
 	uint16_t e_shstrndx;	    // Index of Section Header string table
 } Elf32_Ehdr;
 
+//Section
+typedef struct {
+	uint32_t sh_name;
+	uint32_t sh_type;
+	uint32_t sh_flags;
+	uint32_t sh_addr;
+	uint32_t sh_offset;
+	uint32_t sh_size;
+	uint32_t sh_link;
+	uint32_t sh_info;
+	uint32_t sh_addralign;
+	uint32_t sh_entsize;
+} Elf32_Shdr;
+
 //PE
 typedef struct {
 	uint32_t signature;
@@ -34,8 +50,42 @@ typedef struct {
 	uint16_t sizeOfOptionalHeader;
 	uint16_t characteristics;
 } PE_Header;
-
-#define THREAD_COUNT 2
+typedef struct {
+	uint32_t Signature;
+	PE_Header Fileheader;
+} PE_FILE;
+typedef struct {
+	uint16_t e_magic;
+	uint16_t e_cblp;
+	uint16_t e_cp;
+	uint16_t e_crlc;
+	uint16_t e_cparhdr;
+	uint16_t e_minalloc;
+	uint16_t e_maxalloc;
+	uint16_t e_ss;
+	uint16_t e_sp;
+	uint16_t e_csum;
+	uint16_t e_ip;
+	uint16_t e_cs;
+	uint16_t e_lfarlc;
+	uint16_t e_ovno;
+	uint16_t e_res[4];
+	uint16_t e_oeminfo;
+	uint16_t e_res2[10];
+	uint32_t e_lfanew;
+} IMAGE_DOS_HEADER;
+typedef struct {
+	char Name[8];
+	uint32_t VirtualSize;
+	uint32_t VirtualAddress;
+	uint32_t SizeOfRawData;
+	uint32_t PointerToRawData;
+	uint32_t PointerToRelocations;
+	uint32_t PointerToLinenumbers;
+	uint16_t NumberOfRelocations;
+	uint16_t NumberOfLinenumbers;
+	uint32_t Characteristics;
+} IMAGE_SECTION_HEADER;
 
 pthread_mutex_t print_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -66,6 +116,88 @@ void print_pe_info_slow(PE_Header *pe_header){
 	printf("PE File Detected.\n");
 	printf("Number of Sections: %d\n", pe_header->numberOfSections);
 	pthread_mutex_unlock(&print_mutex);
+}
+int strip_symbols_elf(char *filename){
+	FILE *f = fopen(filename, "r+b");
+	if(!f){
+		perror("Error opening file to strip.\n");
+		return 1;
+	}
+	Elf32_Ehdr ehdr;
+	Elf32_Shdr shstrtab_hdr;
+	fread(&ehdr, sizeof(ehdr), 1, f);
+	if(ehdr.e_ident[0] != 0x7f || memcmp(&ehdr.e_ident[1], "ELF", 3) !=0){
+		perror("Not an Elf File.\n");
+		fclose(f);
+		return 1;
+	}
+	fseek(f, ehdr.e_shoff + ehdr.e_shstrndx * sizeof(Elf32_Shdr), SEEK_SET);
+	fread(&shstrtab_hdr, sizeof(shstrtab_hdr), 1, f);
+	char *shstrtab = malloc(shstrtab_hdr.sh_size);
+	fseek(f, shstrtab_hdr.sh_offset, SEEK_SET);
+	fread(shstrtab, shstrtab_hdr.sh_size, 1, f);
+
+	fseek(f, ehdr.e_shoff, SEEK_SET);
+	for (int i = 0; i < ehdr.e_shnum; i++){
+		Elf32_Shdr shdr;
+		fread(&shdr, sizeof(shdr), 1, f);
+		const char* name = shstrtab + shdr.sh_name;
+		printf("Section %d Name %s Offset 0x%x Type 0x%x Size 0x%x \n", i, name, shdr.sh_offset, shdr.sh_type, shdr.sh_size);
+
+		if(shdr.sh_type == 2 || shdr.sh_type == 11 || shdr.sh_type == 3 || shdr.sh_type == 0x6){
+			printf("Found Section: %s (Type: %u) at offset: 0x%x, size 0x%x.\n",
+					name, shdr.sh_type, shdr.sh_offset, shdr.sh_size);
+			fseek(f, shdr.sh_offset, SEEK_SET);
+			char *zero = calloc(1, shdr.sh_size);
+			fwrite(zero, shdr.sh_size, 1, f);
+			free(zero);
+			//printf("File pointer after stripping section %d 0x%lx\n", i, ftell(f));
+		}
+		if (i < ehdr.e_shnum - 1){
+			fseek(f, ehdr.e_shoff + (i+1) * sizeof(Elf32_Shdr), SEEK_SET);
+		}
+	}
+	free(shstrtab);
+	fclose(f);
+	return 0;
+}
+int strip_symbols_pe(char *filename){
+	FILE *f = fopen(filename, "r+b");
+	if(!f){
+		perror("Error opening file for stripping.\n");
+		return 1;
+	}
+	IMAGE_DOS_HEADER dosHeader;
+	fread(&dosHeader, sizeof(dosHeader), 1, f);
+	printf("e_lfanew: 0x%lx\n", dosHeader.e_lfanew);
+	fseek(f, dosHeader.e_lfanew, SEEK_SET);
+
+	PE_FILE peFile;
+	fread(&peFile, sizeof(peFile), 1, f);
+	printf("Number of sections: %d\n", peFile.Fileheader.numberOfSections);
+
+	IMAGE_SECTION_HEADER sectionHeader;
+	fseek(f, dosHeader.e_lfanew + sizeof(PE_FILE), SEEK_SET);
+
+	for(int i = 0; i < peFile.Fileheader.numberOfSections; i++){
+		fread(&sectionHeader, sizeof(sectionHeader), 1, f);
+		char sectionName[9];
+		strncpy(sectionName, sectionHeader.Name, 8);
+		sectionName[8] = '\0';
+		printf("Section %d Name %s Virtual Size 0x%x Virtual Address 0x%x Size of Raw Data 0x%x\n",
+				i, sectionName,sectionHeader.VirtualSize, sectionHeader.VirtualAddress,
+				sectionHeader.SizeOfRawData);
+		if(strstr(sectionName, ".data") || strstr(sectionName, ".rdata") || 
+				strstr(sectionName, ".idata") || strstr(sectionName, ".pdata") ||
+				strstr(sectionName, ".text") || strstr(sectionName, ".debug")){
+			fseek(f, sectionHeader.PointerToRawData, SEEK_SET);
+			char *zero = calloc(1, sectionHeader.SizeOfRawData);
+			fwrite(zero, sectionHeader.SizeOfRawData, 1, f);
+			free(zero);
+			printf("File pointer after stripping section %d: 0x%lx\n", i, ftell(f));
+		}
+	}
+	fclose(f);
 }
 
 int identify(char *filename){
@@ -98,6 +230,11 @@ int identify(char *filename){
 		pend = clock();
 		time = ((double)(pend-pstart));
 		printf("slow print elf info: %f\n", time);
+		pstart = clock();
+		strip_symbols_elf(filename);
+		pend = clock();
+		time = ((double)(pend-pstart));
+		printf("Time to strip sym tab: %f\n", time);
 	}
 	else if (magic[0] == 0x4D && magic[1] == 0x5A){
 		fseek(file, 0x3C, SEEK_SET);
@@ -117,6 +254,11 @@ int identify(char *filename){
 		pend = clock();
 		time = ((double)(pend-pstart));
 		printf("slow print pe info: %f\n", time);
+		pstart = clock();
+		strip_symbols_pe(filename);
+		pend = clock();
+		time = ((double)(pend-pstart));
+		printf("Strip PE symbol time: %f\n", time);
 	}
 	else {
 		fprintf(stderr, "Unknown file format\n");
@@ -142,7 +284,7 @@ int main(int argc, char *argv[]){
 		pthread_t tid[THREAD_COUNT];
 		start_two = clock();
 		for (int i = 0; i<argc-1; i++){
-			if (argc & 1 == 0){
+			if (i & 1 == 0){
 			pthread_create(&tid[0], NULL, identify, argv[i+1]);
 			}
 			else {
