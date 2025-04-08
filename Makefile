@@ -1,5 +1,5 @@
 CC = gcc
-Cflags = -std=c99 -Wall -Wextra -Werror -Wpendantic -Wshadow -Wconversion -pthread
+CFLAGS = -std=c99 -Wall -Wextra -Werror -Wpedantic -Wshadow -Wconversion -pthread
 MINGW_CC = x86_64-w64-mingw32-gcc
 ELF32_CC = gcc -m32
 SRC = Multiloader.c 
