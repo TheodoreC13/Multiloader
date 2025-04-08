@@ -161,6 +161,7 @@ int strip_symbols_elf(char *filename){
 	fclose(f);
 	return 0;
 }
+
 int strip_symbols_pe(char *filename){
 	FILE *f = fopen(filename, "r+b");
 	if(!f){
@@ -168,8 +169,8 @@ int strip_symbols_pe(char *filename){
 		return 1;
 	}
 	IMAGE_DOS_HEADER dosHeader;
-	fread(&dosHeader, sizeof(dosHeader), 1, f);
-	printf("e_lfanew: 0x%lx\n", dosHeader.e_lfanew);
+	fread(&dosHeader, sizeof(IMAGE_DOS_HEADER), 1, f);
+	printf("e_lfanew: 0x%x\n", dosHeader.e_lfanew);
 	fseek(f, dosHeader.e_lfanew, SEEK_SET);
 
 	PE_FILE peFile;
